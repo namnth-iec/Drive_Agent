@@ -87,4 +87,50 @@ read_file_tool = ToolDefinition(
 )
 
 
-ALL_DRIVE_TOOLS = [list_files_tool, read_file_tool]
+# ============================================================
+# Tool 3: SAVE DRIVE FILE TO MEMORY
+# ============================================================
+
+def save_drive_file_to_memory(file_id: str) -> dict:
+    """Download a Drive file and save its FULL content to memory, server-side.
+    The content never passes through the LLM, so it is neither truncated nor paraphrased."""
+    import os
+    from tools.memory import save_memory
+    download = drive_service.download_file(file_id=file_id)
+    temp_path = download["temp_path"]
+    try:
+        content = read_file(temp_path, max_chars=None)["content"]
+    finally:
+        os.unlink(temp_path)
+    saved = save_memory(content, category=f"file:{download['file_name']}")
+    return {
+        "file_name": download["file_name"],
+        "total_chars": len(content),
+        "chunks": saved["chunks"],
+        "category": saved["category"],
+    }
+
+
+save_file_to_memory_tool = ToolDefinition(
+    name="save_drive_file_to_memory",
+    description=(
+        "Save the FULL content of a Google Drive file to long-term memory by its file ID. "
+        "Use this (not save_memory) whenever the user asks to save/remember/index a file: "
+        "the file is read and stored server-side with no length limit."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "file_id": {
+                "type": "string",
+                "description": "The Google Drive file ID to save.",
+            },
+        },
+        "required": ["file_id"],
+    },
+    required_scopes=["drive:read", "memory:write"],
+    handler=save_drive_file_to_memory,
+)
+
+
+ALL_DRIVE_TOOLS = [list_files_tool, read_file_tool, save_file_to_memory_tool]
