@@ -49,12 +49,20 @@ class Agent:
         return self.registry.list_tools()
 
     def run(self, user_message: str) -> str:
+        """Blocking wrapper over stream(): returns only the final text."""
+        final_response = ""
+        for event in self.stream(user_message):
+            if event["type"] == "done":
+                final_response = event["text"]
+        return final_response
+
+    def stream(self, user_message: str):
         """
-        Run the full agent loop:
+        Run the full agent loop, yielding events as they happen:
         1. Add user message to history
-        2. Send to Claude with tools
-        3. If Claude uses tools → run through Registry pipeline
-        4. Loop until Claude gives final text response
+        2. Send to Claude with tools, yielding {"type": "text"} deltas
+        3. If Claude uses tools → run through Registry pipeline, yielding {"type": "tool"}
+        4. Loop until Claude gives final text response, then yield {"type": "done"}
         """
         print(f"\n{'#'*60}")
         print(f"  USER: {user_message}")
@@ -69,13 +77,16 @@ class Agent:
 
         while True:
             print(f"\n>>> Calling Claude LLM...")
-            response = self.client.messages.create(
+            with self.client.messages.stream(
                 model=self.model,
                 max_tokens=4096,
                 system=SYSTEM_PROMPT,
                 tools=tools,
                 messages=self.conversation_history,
-            )
+            ) as s:
+                for delta in s.text_stream:
+                    yield {"type": "text", "text": delta}
+                response = s.get_final_message()
 
             print(f">>> Claude stop_reason: {response.stop_reason}")
 
@@ -99,7 +110,8 @@ class Agent:
                     print(f"  ... [truncated, total {len(final_response)} chars]")
                 print(f"{'#'*60}\n")
 
-                return final_response
+                yield {"type": "done", "text": final_response}
+                return
 
             # Process tool calls
             self.conversation_history.append({
@@ -108,6 +120,7 @@ class Agent:
             })
 
             tool_results = []
+            tool_events = []
             for block in response.content:
                 if block.type == "tool_use":
                     tool_name = block.name
@@ -126,11 +139,18 @@ class Agent:
                         "tool_use_id": tool_use_id,
                         "content": json.dumps(result, ensure_ascii=False, default=str),
                     })
+                    tool_events.append({
+                        "type": "tool",
+                        "name": tool_name,
+                        "status": "failed" if "error" in result else "ok",
+                    })
 
             self.conversation_history.append({
                 "role": "user",
                 "content": tool_results,
             })
+            # Yield only after history is consistent: a client disconnect here must not leave a tool_use without its tool_result
+            yield from tool_events
 
     def clear_history(self):
         self.conversation_history = []

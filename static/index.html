@@ -299,6 +299,7 @@ function addMessage(text, role, toolsUsed = []) {
 
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    return div;
 }
 
 function setTyping(active) {
@@ -332,13 +333,32 @@ async function sendMessage() {
     setTyping(true);
 
     try {
-        const res = await fetch(API + '/api/chat', {
+        // fetch + reader instead of EventSource: EventSource is GET-only and auto-reconnects (would resend the message)
+        const res = await fetch(API + '/api/chat/stream', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: SESSION_ID, message })
         });
-        const data = await res.json();
-        addMessage(data.response, 'assistant', data.tools_used);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '', text = '', bubble = null;
+        const tools = [];
+        while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buf += decoder.decode(value, { stream: true });
+            const frames = buf.split('\n\n');
+            buf = frames.pop();  // keep the incomplete frame for the next chunk
+            for (const frame of frames) {
+                const ev = JSON.parse(frame.slice('data: '.length));
+                if (ev.type === 'text' || ev.type === 'error') text += ev.text;
+                else if (ev.type === 'tool') tools.push(ev.status === 'ok' ? ev.name : ev.name + ' (failed)');
+            }
+            setTyping(false);
+            const next = addMessage(text, 'assistant', tools);
+            if (bubble) bubble.replaceWith(next);
+            bubble = next;
+        }
     } catch (err) {
         addMessage('Error: ' + err.message, 'assistant');
     } finally {

@@ -6,7 +6,7 @@ import json
 import traceback
 import uvicorn
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
@@ -62,6 +62,22 @@ def chat(req: ChatRequest):
             status_code=500,
             content={"response": f"Error: {e}", "tools_used": []},
         )
+
+
+@app.post("/api/chat/stream")
+def chat_stream(req: ChatRequest):
+    """SSE: one `data: {json}` frame per agent event (text / tool / done / error)."""
+    agent = get_agent(req.session_id)
+
+    def events():
+        try:
+            for event in agent.stream(req.message):
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            traceback.print_exc()
+            yield f"data: {json.dumps({'type': 'error', 'text': f'Error: {e}'}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @app.post("/api/clear")

@@ -25,7 +25,7 @@ def main():
     print("  Capabilities: Google Drive | Read File | RAG Memory")
     print("="*60)
 
-    agent = Agent(service_api_key="sk-admin-001")
+    agent = Agent(service_api_key="sk-guest-003")
 
     print_help()
 
